@@ -874,27 +874,27 @@ def load_keselamatan_per_perairan():
     return hasil
 
 def cek_status_perahu(angin, gelombang):
-    """Kembalikan list perahu yang DILARANG dan DIIZINKAN."""
-    dilarang = []
-    diizinkan = []
+    """Kembalikan list perahu yang WASPADA dan AMAN."""
+    waspada = []
+    aman = []
     for b in BATAS_KESELAMATAN:
         bahaya = (
             (angin     is not None and angin     >= b["angin"]) or
             (gelombang is not None and gelombang >= b["gelombang"])
         )
         if bahaya:
-            dilarang.append(b["nama"])
+            waspada.append(b["nama"])
         else:
-            diizinkan.append(b["nama"])
-    return dilarang, diizinkan
+            aman.append(b["nama"])
+    return waspada, aman
 
 def format_keselamatan_html():
     """Render tabel keselamatan sebagai HTML di dalam bubble."""
     data = load_keselamatan_per_perairan()
 
     STATUS_COLORS = {
-        "DILARANG":  ("background:#FFCDD2;color:#B71C1C;font-weight:700;", "DILARANG"),
-        "DIIZINKAN": ("background:#C8E6C9;color:#1B5E20;font-weight:700;", "DIIZINKAN"),
+        "WASPADA":  ("background:#FFCDD2;color:#B71C1C;font-weight:700;", "WASPADA"),
+        "AMAN": ("background:#C8E6C9;color:#1B5E20;font-weight:700;", "AMAN"),
     }
 
     th = "padding:7px 10px;background:#f0f4f8;color:#0d2d52;font-weight:700;font-size:11.5px;border-bottom:2px solid #d0dcea;text-align:center;white-space:nowrap;"
@@ -927,9 +927,9 @@ def format_keselamatan_html():
             html += f'<td style="{td_left}">{r["perairan"]}</td>'
             html += f'<td style="{td_base}">{r["angin_str"]} knot</td>'
             html += f'<td style="{td_base}">{r["gel_str"]} m</td>'
-            dilarang, diizinkan = cek_status_perahu(r["angin"], r["gelombang"])
+            waspada, aman = cek_status_perahu(r["angin"], r["gelombang"])
             for b in BATAS_KESELAMATAN:
-                status = "DILARANG" if b["nama"] in dilarang else "DIIZINKAN"
+                status = "WASPADA" if b["nama"] in waspada else "AMAN"
                 style, text = STATUS_COLORS[status]
                 html += f'<td style="{td_base}"><span style="{style}padding:3px 8px;border-radius:10px;font-size:11px;">{text}</span></td>'
             html += '</tr>'
@@ -952,12 +952,12 @@ def build_keselamatan_llm_context():
             continue
         lines.append(f"\n{label} ({rows[0]['tanggal']}):")
         for r in rows:
-            dilarang, diizinkan = cek_status_perahu(r["angin"], r["gelombang"])
+            waspada, aman = cek_status_perahu(r["angin"], r["gelombang"])
             status_parts = []
-            if dilarang:
-                status_parts.append("DILARANG: " + ", ".join(dilarang))
-            if diizinkan:
-                status_parts.append("DIIZINKAN: " + ", ".join(diizinkan))
+            if waspada:
+                status_parts.append("WASPADA: " + ", ".join(waspada))
+            if aman:
+                status_parts.append("AMAN: " + ", ".join(aman))
             lines.append(
                 f"  {r['perairan']}: angin {r['angin_str']} knot, gelombang {r['gel_str']} m"
                 + (" | " + " | ".join(status_parts) if status_parts else "")
@@ -1086,7 +1086,7 @@ DATA CUACA MARITIM:
 ATURAN:
 - Jangan menampilkan Pasang Tertinggi/Surut Terendah dalam peringatan dini.
 - Jangan mengarang data.
-- Jika ditanya tentang keselamatan berlayar atau jenis perahu yang boleh/dilarang berlayar,
+- Jika ditanya tentang keselamatan berlayar atau jenis perahu yang aman/boleh/dilarang berlayar,
   gunakan DATA KESELAMATAN PELAYARAN di atas untuk menjawab secara spesifik per wilayah.
 - Tolak pertanyaan di luar topik cuaca maritim dengan sopan.
 - Kontak: WhatsApp https://wa.me/628116601044 | IG @stamar_tlkbayur
