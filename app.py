@@ -12,8 +12,8 @@ import re
 # LOAD ENVIRONMENT VARIABLES
 # =====================================================
 load_dotenv()
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-GSHEET_ID = st.secrets["GSHEET_ID"]
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GSHEET_ID = os.getenv("GSHEET_ID")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -306,6 +306,9 @@ button[data-testid="toggle_menu"] {{
     border-radius: 4px 18px 18px 18px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.08);
 }}
+.bubble.bubble-html {{
+    white-space: normal !important;
+}}
 .bubble.user {{
     background: linear-gradient(135deg, #0d3663, #1a6aab);
     color: #fff;
@@ -594,6 +597,7 @@ div[data-testid="column"] > div[data-testid="stVerticalBlock"] {{
 </style>
 """, unsafe_allow_html=True)
 
+
 # =====================================================
 # FUNGSI MEMBACA GOOGLE SHEETS
 # =====================================================
@@ -769,7 +773,7 @@ def format_suhu(data_dict):
     return "__SUHU_HTML__" + html
 
 # =====================================================
-# FORMAT RESPONSES
+# FORMAT RESPONSES PERINGATAN DINI & RINGKASAN CUACA
 # =====================================================
 def format_peringatan(pj, today, besok, lusa):
     tanggal_map = {"hari_ini": today, "besok": besok, "lusa": lusa}
@@ -815,16 +819,248 @@ def format_ringkasan_cuaca(rj):
     output += "Sumber: Stasiun Meteorologi Maritim Teluk Bayur - BMKG"
     return output
 
-# def format_suhu(rj):
-#     output = "Informasi Suhu Maritim Sumatera Barat\n\n"
-#     label_hari = {"hari_ini": "Hari Ini", "besok": "Besok", "lusa": "Lusa"}
-#     for hari, label in label_hari.items():
-#         data    = rj.get(hari, {})
-#         suhu    = data.get("Suhu (Rata²)", "-")
-#         tanggal = data.get("Tanggal", "-")
-#         output += f"**{label} ({tanggal})**: {suhu if suhu not in ['', '-', None] else 'Data tidak tersedia'} °C\n"
-#     output += "\nSumber: Stasiun Meteorologi Maritim Teluk Bayur - BMKG"
-#     return output
+# =====================================================
+# FORMAT KESELAMATAN PERAHU
+# =====================================================
+BATAS_KESELAMATAN = [
+    {"nama": "Perahu Nelayan",          "angin": 15,  "gelombang": 1.25},
+    {"nama": "Kapal Tongkang",          "angin": 16,  "gelombang": 1.5},
+    {"nama": "Kapal Ferry",             "angin": 21,  "gelombang": 2.5},
+    {"nama": "Kapal Besar (Kargo/Pesiar)", "angin": 27, "gelombang": 4.0},
+]
+
+def parse_knot(value):
+    try:
+        return float(re.search(r"[\d.]+", str(value)).group())
+    except:
+        return None
+
+def parse_meter(value):
+    try:
+        return float(re.search(r"[\d.]+", str(value)).group())
+    except:
+        return None
+
+@st.cache_data(ttl=600)
+def load_keselamatan_per_perairan():
+    """Ambil data angin & gelombang per perairan per hari dari Ringkasan semua."""
+    df = load_sheet("Ringkasan%20semua")
+    df.columns = df.columns.str.strip()
+    df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
+    df["perairan"] = df["perairan"].astype(str).str.strip()
+    df = df.drop(columns=["Sumber Data"], errors="ignore")
+
+    today_ts  = pd.Timestamp.now().normalize()
+    besok_ts  = today_ts + pd.Timedelta(days=1)
+    lusa_ts   = today_ts + pd.Timedelta(days=2)
+
+    hasil = {}
+    for label, tgl in [("Hari Ini", today_ts), ("Besok", besok_ts), ("Lusa", lusa_ts)]:
+        df_tgl = df[df["Tanggal"] == tgl].copy()
+        df_tgl = df_tgl.sort_index().groupby("perairan", as_index=False).last()
+        rows = []
+        for _, row in df_tgl.iterrows():
+            angin     = parse_knot(row.get("Kecepatan Angin (Maks)", ""))
+            gelombang = parse_meter(row.get("Tinggi Gelombang (Maks)", ""))
+            rows.append({
+                "perairan":  row["perairan"],
+                "angin":     angin,
+                "gelombang": gelombang,
+                "angin_str": str(row.get("Kecepatan Angin (Maks)", "-")).strip(),
+                "gel_str":   str(row.get("Tinggi Gelombang (Maks)", "-")).strip(),
+                "tanggal":   tgl.strftime("%d/%m/%Y"),
+            })
+        hasil[label] = rows
+    return hasil
+
+def cek_status_perahu(angin, gelombang):
+    """Kembalikan list perahu yang DILARANG dan DIIZINKAN."""
+    dilarang = []
+    diizinkan = []
+    for b in BATAS_KESELAMATAN:
+        bahaya = (
+            (angin     is not None and angin     >= b["angin"]) or
+            (gelombang is not None and gelombang >= b["gelombang"])
+        )
+        if bahaya:
+            dilarang.append(b["nama"])
+        else:
+            diizinkan.append(b["nama"])
+    return dilarang, diizinkan
+
+def format_keselamatan_html():
+    """Render tabel keselamatan sebagai HTML di dalam bubble."""
+    data = load_keselamatan_per_perairan()
+
+    STATUS_COLORS = {
+        "DILARANG":  ("background:#FFCDD2;color:#B71C1C;font-weight:700;", "DILARANG"),
+        "DIIZINKAN": ("background:#C8E6C9;color:#1B5E20;font-weight:700;", "DIIZINKAN"),
+    }
+
+    th = "padding:7px 10px;background:#f0f4f8;color:#0d2d52;font-weight:700;font-size:11.5px;border-bottom:2px solid #d0dcea;text-align:center;white-space:nowrap;"
+    th_left = th + "text-align:left;"
+    td_base = "padding:7px 10px;font-size:12px;border-bottom:1px solid #e8eef5;text-align:center;white-space:nowrap;"
+    td_left = td_base + "text-align:left;font-weight:600;color:#1a2332;"
+
+    html = '<div style="font-family:\'Plus Jakarta Sans\',sans-serif;">'
+    html += '<div style="font-size:13.5px;font-weight:700;color:#0d2d52;margin-bottom:4px;padding-bottom:8px;border-bottom:2px solid rgba(26,106,171,0.15);">Rekomendasi Keselamatan Pelayaran</div>'
+    html += '<div style="font-size:11px;color:#546e7a;margin-bottom:12px;">Perahu berisiko jika angin atau gelombang mencapai/melebihi batas keselamatan.</div>'
+
+    for label, rows in data.items():
+        if not rows:
+            continue
+        tanggal = rows[0]["tanggal"]
+        html += f'<div style="font-size:12px;font-weight:700;color:#0d3663;margin:10px 0 5px;background:rgba(13,54,99,0.07);padding:5px 10px;border-radius:6px;">{label} &middot; {tanggal}</div>'
+        html += f'<div style="overflow-x:auto;margin-bottom:8px;">'
+        html += '<table style="width:100%;border-collapse:collapse;background:#fff;">'
+        html += '<thead><tr>'
+        html += f'<th style="{th_left}">Perairan</th>'
+        html += f'<th style="{th}">Angin Maks</th>'
+        html += f'<th style="{th}">Gelombang Maks</th>'
+        for b in BATAS_KESELAMATAN:
+            html += f'<th style="{th}">{b["nama"]}</th>'
+        html += '</tr></thead><tbody>'
+
+        for i, r in enumerate(rows):
+            row_bg = "background:#f9fbff;" if i % 2 == 0 else "background:#ffffff;"
+            html += f'<tr style="{row_bg}">'
+            html += f'<td style="{td_left}">{r["perairan"]}</td>'
+            html += f'<td style="{td_base}">{r["angin_str"]} knot</td>'
+            html += f'<td style="{td_base}">{r["gel_str"]} m</td>'
+            dilarang, diizinkan = cek_status_perahu(r["angin"], r["gelombang"])
+            for b in BATAS_KESELAMATAN:
+                status = "DILARANG" if b["nama"] in dilarang else "DIIZINKAN"
+                style, text = STATUS_COLORS[status]
+                html += f'<td style="{td_base}"><span style="{style}padding:3px 8px;border-radius:10px;font-size:11px;">{text}</span></td>'
+            html += '</tr>'
+
+        html += '</tbody></table></div>'
+
+    html += '<div style="font-size:10px;color:rgba(13,45,82,0.4);margin-top:8px;text-align:right;font-style:italic;">Sumber: Stasiun Meteorologi Maritim Teluk Bayur – BMKG</div>'
+    html += '</div>'
+    return "__KESELAMATAN__" + html
+
+def build_keselamatan_llm_context():
+    """
+    Buat ringkasan teks dari data keselamatan untuk dimasukkan ke system prompt LLM.
+    """
+    data = load_keselamatan_per_perairan()
+    lines = ["DATA KESELAMATAN PELAYARAN PER PERAIRAN:"]
+    lines.append("Batas risiko: Perahu Nelayan >=15kt/1.25m | Tongkang >=16kt/1.5m | Ferry >=21kt/2.5m | Kapal Besar >=27kt/4m")
+    for label, rows in data.items():
+        if not rows:
+            continue
+        lines.append(f"\n{label} ({rows[0]['tanggal']}):")
+        for r in rows:
+            dilarang, diizinkan = cek_status_perahu(r["angin"], r["gelombang"])
+            status_parts = []
+            if dilarang:
+                status_parts.append("DILARANG: " + ", ".join(dilarang))
+            if diizinkan:
+                status_parts.append("DIIZINKAN: " + ", ".join(diizinkan))
+            lines.append(
+                f"  {r['perairan']}: angin {r['angin_str']} knot, gelombang {r['gel_str']} m"
+                + (" | " + " | ".join(status_parts) if status_parts else "")
+            )
+    return "\n".join(lines)
+
+
+# =====================================================
+# FUNGSI AMBIL DATA DINAMIS BERDASARKAN PERTANYAAN USER
+# =====================================================
+def parse_tanggal_dari_pertanyaan(text):
+    text = text.lower()
+    today = datetime.now().date()
+
+    # keyword relatif
+    if "hari ini" in text:
+        return today
+    elif "besok" in text:
+        return today + timedelta(days=1)
+    elif "lusa" in text:
+        return today + timedelta(days=2)
+    elif "kemarin" in text:
+        return today - timedelta(days=1)
+
+    # format: 10/04/2026 atau 10-04-2026
+    match_numeric = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", text)
+    if match_numeric:
+        day, month, year = match_numeric.groups()
+        year = int(year)
+        if year < 100:
+            year += 2000
+        return datetime(int(year), int(month), int(day)).date()
+
+    # format: 10 april 2026
+    try:
+        parsed = pd.to_datetime(text, dayfirst=True, errors='coerce')
+        if pd.notna(parsed):
+            return parsed.date()
+    except:
+        pass
+    return None
+
+INTENT_MAP = {
+    "suhu": ["Suhu (Rata²)"],
+    "kelembapan": ["RH (Rata²)"],
+    "angin": ["Arah Angin Terbanyak", "Kecepatan Angin (Maks)", "Kecepatan Angin (Min)"],
+    "gelombang": ["Gelombang Signifikan", "Tinggi Gelombang (Maks)", "Tinggi Gelombang (Min)"],
+    "arus": ["Arah Arus Terbanyak", "Kecepatan Arus (Maks)"],
+    "cuaca": ["Cuaca Signifikan", "Cuaca Terbaik"],
+}
+
+def detect_intent(text):
+    text = text.lower()
+    hasil = []
+
+    for key, kolom in INTENT_MAP.items():
+        if key in text:
+            hasil.extend(kolom)
+
+    # default fallback
+    if not hasil:
+        hasil = ["Cuaca Signifikan"]
+
+    return hasil
+
+
+def ambil_data_dinamis(user_input):
+    df = load_sheet("Ringkasan%20semua")
+
+    # cleaning
+    df.columns = df.columns.str.strip()
+    df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
+    df["perairan"] = df["perairan"].astype(str).str.strip()
+
+    # detect intent
+    kolom_dipakai = detect_intent(user_input)
+
+    # detect tanggal
+    tanggal = parse_tanggal_dari_pertanyaan(user_input)
+
+    if tanggal is None:
+        tanggal = datetime.now().date()
+
+    # filter berdasarkan tanggal (satu filter saja, tanpa duplikasi)
+    df = df[df["Tanggal"].dt.date == tanggal]
+
+    # ambil data terbaru per wilayah
+    df = (
+        df.sort_index()
+        .groupby("perairan", as_index=False)
+        .last()
+    )
+
+    # pilih kolom penting — pastikan kolom ada di dataframe
+    kolom_tersedia = [k for k in kolom_dipakai if k in df.columns]
+    if not kolom_tersedia:
+        kolom_tersedia = ["Cuaca Signifikan"] if "Cuaca Signifikan" in df.columns else []
+
+    kolom_final = ["perairan", "Tanggal"] + kolom_tersedia
+    kolom_final = [k for k in kolom_final if k in df.columns]
+    df = df[kolom_final]
+
+    return df, tanggal
 
 # =====================================================
 # SYSTEM PROMPT & CHATBOT
@@ -845,22 +1081,68 @@ DATA PERINGATAN DINI:
 DATA CUACA MARITIM:
 {json.dumps(cuaca_json, indent=2, ensure_ascii=False)}
 
+{build_keselamatan_llm_context()}
+
 ATURAN:
 - Jangan menampilkan Pasang Tertinggi/Surut Terendah dalam peringatan dini.
 - Jangan mengarang data.
+- Jika ditanya tentang keselamatan berlayar atau jenis perahu yang boleh/dilarang berlayar,
+  gunakan DATA KESELAMATAN PELAYARAN di atas untuk menjawab secara spesifik per wilayah.
 - Tolak pertanyaan di luar topik cuaca maritim dengan sopan.
 - Kontak: WhatsApp https://wa.me/628116601044 | IG @stamar_tlkbayur
 """
 
-def ask_chatbot(question):
+def ask_chatbot(user_input):
+
+    df, tanggal = ambil_data_dinamis(user_input)
+
+    tanggal_str = tanggal.strftime("%d %B %Y") if tanggal else "tidak diketahui"
+
+    if df.empty:
+        # Coba ambil semua tanggal yang tersedia di sheet untuk memberi info yang berguna
+        try:
+            df_all = load_sheet("Ringkasan%20semua")
+            df_all.columns = df_all.columns.str.strip()
+            df_all["Tanggal"] = pd.to_datetime(df_all["Tanggal"], errors="coerce")
+            tanggal_tersedia = sorted(df_all["Tanggal"].dropna().dt.date.unique())
+            if tanggal_tersedia:
+                tgl_info = ", ".join([t.strftime("%d/%m/%Y") for t in tanggal_tersedia[-5:]])
+                return (
+                    f"Maaf, data cuaca maritim untuk tanggal {tanggal_str} tidak tersedia dalam sistem kami.\n\n"
+                    f"Data yang tersedia mencakup tanggal-tanggal berikut (5 terbaru): {tgl_info}.\n\n"
+                    f"Silakan tanyakan informasi untuk tanggal yang tersedia, atau gunakan menu utama untuk prakiraan 3 hari ke depan."
+                )
+        except:
+            pass
+        return (
+            f"Maaf, data cuaca maritim untuk tanggal {tanggal_str} tidak tersedia dalam sistem kami. "
+            f"Silakan gunakan menu utama untuk melihat prakiraan cuaca 3 hari ke depan, atau hubungi kami melalui WhatsApp: https://wa.me/628116601044"
+        )
+
+    data_text = df.to_markdown(index=False)
+
+    dynamic_prompt = f"""
+Data cuaca maritim Sumatera Barat untuk tanggal {tanggal_str}:
+
+{data_text}
+
+Instruksi:
+- Jawaban HARUS berdasarkan data di atas
+- Sebutkan tanggal data yang digunakan dalam jawaban
+- Jangan mengatakan data tidak tersedia jika data ada di tabel
+- Jika kolom "Cuaca Signifikan" ada, jelaskan kondisi cuaca secara ringkas per wilayah
+- Gunakan bahasa Indonesia yang jelas dan profesional
+"""
+
     response = client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-4o-mini",
         temperature=0.0,
         messages=[
             {"role": "system", "content": build_system_prompt()},
-            {"role": "user",   "content": question}
+            {"role": "user", "content": dynamic_prompt + "\n\nPertanyaan: " + user_input}
         ],
     )
+
     return response.choices[0].message.content
 
 # =====================================================
@@ -891,10 +1173,13 @@ def render_messages_html():
             # Detect raw HTML content (suhu table or link cards)
             if content.startswith("__SUHU_HTML__"):
                 inner_html = content[len("__SUHU_HTML__"):]
-                parts.append(f'<div class="msg-row bot">{av}<div class="bubble bot bubble-wide">{inner_html}{ts_html}</div></div>')
+                parts.append(f'<div class="msg-row bot">{av}<div class="bubble bot bubble-wide bubble-html">{inner_html}{ts_html}</div></div>')
             elif content.startswith("__HTML__"):
                 inner_html = content[len("__HTML__"):]
-                parts.append(f'<div class="msg-row bot">{av}<div class="bubble bot">{inner_html}{ts_html}</div></div>')
+                parts.append(f'<div class="msg-row bot">{av}<div class="bubble bot bubble-html">{inner_html}{ts_html}</div></div>')
+            elif content.startswith("__KESELAMATAN__"):
+                inner_html = content[len("__KESELAMATAN__"):]
+                parts.append(f'<div class="msg-row bot">{av}<div class="bubble bot bubble-wide bubble-html">{inner_html}{ts_html}</div></div>')
             else:
                 esc = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 esc = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', esc)
@@ -940,6 +1225,9 @@ if not has_messages:
         Halo! Selamat datang di Layanan Chatbot<br>
         <strong>BMKG Maritim Teluk Bayur</strong>.<br>
         Silakan pilih menu di bawah.
+        \n Notes: 
+        Jika ingin menanyakan cuaca lampau ketik tanggal dalam format DD/MM/YYYY, 
+        contoh "Bagaimana cuaca maritim pada 15/03/2026?".
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -962,11 +1250,12 @@ if has_messages:
 
 # ── MENU BUTTONS ──────────────────────────────────────
 menu_items = [
-    ("peringatan", " Informasi Peringatan Dini"),
-    ("infografis", " Layanan Infografis dan Website"),
-    ("cuaca",      " Ringkasan Cuaca Maritim Sumbar (3 Hari)"),
-    ("lokasi",     " Lokasi dan Kontak"),
-    ("suhu",       " Informasi Suhu Maritim"),
+    ("peringatan",  " Informasi Peringatan Dini"),
+    ("infografis",  " Layanan Infografis dan Website"),
+    ("cuaca",       " Ringkasan Cuaca Maritim Sumbar (3 Hari)"),
+    ("keselamatan", " Jenis Perahu yang Diizinkan Berlayar"),
+    ("lokasi",      " Lokasi dan Kontak"),
+    ("suhu",        " Informasi Suhu Maritim"),
 ]
 
 show_menu_now = (not has_messages) or st.session_state.show_menu
@@ -988,6 +1277,8 @@ if show_menu_now:
                 elif menu_id == "suhu":
                     suhu_data = load_suhu_berdasarkan_tanggal()
                     resp = format_suhu(suhu_data)
+                elif menu_id == "keselamatan":
+                    resp = format_keselamatan_html()
                 elif menu_id == "infografis":
                     resp = "__HTML__" + """
 <strong>Layanan Infografis dan Website</strong><br>
