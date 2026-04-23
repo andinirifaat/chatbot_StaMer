@@ -666,7 +666,7 @@ ringkasan_json  = load_ringkasan_cuaca()
 
 
 #=====================================================
-# LOAD SUHU 
+# LOAD SUHU
 #=====================================================
 WILAYAH_PERAIRAN = [
     "Agam-Pasbar",
@@ -1296,17 +1296,19 @@ if show_menu_now:
                 clean_label = "  ".join(label.split("  ")[1:]) if "  " in label else label
                 st.session_state.messages.append({"role": "user", "content": clean_label, "time": now})
 
-                if menu_id == "peringatan":
-                    resp = format_peringatan(peringatan_json, today, besok, lusa)
-                elif menu_id == "cuaca":
-                    resp = format_ringkasan_cuaca(ringkasan_json)
-                elif menu_id == "suhu":
-                    suhu_data = load_suhu_berdasarkan_tanggal()
-                    resp = format_suhu(suhu_data)
-                elif menu_id == "keselamatan":
-                    resp = format_keselamatan_html()
-                elif menu_id == "infografis":
-                    resp = "__HTML__" + """
+                # ── SPINNER DITAMBAHKAN DI SINI ──────────────────────
+                with st.spinner("Memproses..."):
+                    if menu_id == "peringatan":
+                        resp = format_peringatan(peringatan_json, today, besok, lusa)
+                    elif menu_id == "cuaca":
+                        resp = format_ringkasan_cuaca(ringkasan_json)
+                    elif menu_id == "suhu":
+                        suhu_data = load_suhu_berdasarkan_tanggal()
+                        resp = format_suhu(suhu_data)
+                    elif menu_id == "keselamatan":
+                        resp = format_keselamatan_html()
+                    elif menu_id == "infografis":
+                        resp = "__HTML__" + """
 <strong>Layanan Infografis dan Website</strong><br>
 Informasi geografis berupa poster infografis prakiraan cuaca maritim Sumatera Barat tersedia setiap hari di kanal Instagram resmi dan website StaMer Teluk Bayur .
 Website Resmi Stasiun Meteorologi Maritim Teluk Bayur:
@@ -1316,8 +1318,8 @@ Website Resmi BMKG Maritim:
 Instagram:
 <a href="https://www.instagram.com/stamar_tlkbayur/" target="_blank">@stamar_tlkbayur</a>
 """
-                elif menu_id == "lokasi":
-                    resp = "__HTML__" + """
+                    elif menu_id == "lokasi":
+                        resp = "__HTML__" + """
 <strong>Lokasi dan Kontak</strong><br>
 Silahkan hubungi Stasiun Meteorologi Maritim Teluk Bayur melalui kontak resmi berikut untuk informasi lebih lanjut atau pertanyaan terkait cuaca maritim Sumatera Barat :
 WhatsApp:
@@ -1333,8 +1335,8 @@ Google Maps:
 Alamat:
 Jl. Sutan Syahrir Komp. Pelindo No.26, Rawang, Kec. Padang Selatan, Kota Padang, Sumatera Barat 25123.
 """
-                else:
-                    resp = "Informasi tidak tersedia."
+                    else:
+                        resp = "Informasi tidak tersedia."
 
                 st.session_state.messages.append({"role": "assistant", "content": resp, "time": now})
                 st.session_state.show_menu = False
