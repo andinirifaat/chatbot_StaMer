@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import json
 import base64
 import re
+import time
 
 # =====================================================
 # LOAD ENVIRONMENT VARIABLES
@@ -1094,12 +1095,16 @@ ATURAN:
 
 def ask_chatbot(user_input):
 
+    t_total_start = time.time()
+
+    # ── [1] DATA RETRIEVAL ──────────────────────────────
+    t_fetch_start = time.time()
     df, tanggal = ambil_data_dinamis(user_input)
+    t_fetch = round(time.time() - t_fetch_start, 3)
 
     tanggal_str = tanggal.strftime("%d %B %Y") if tanggal else "tidak diketahui"
 
     if df.empty:
-        # Coba ambil semua tanggal yang tersedia di sheet untuk memberi info yang berguna
         try:
             df_all = load_sheet("Ringkasan%20semua")
             df_all.columns = df_all.columns.str.strip()
@@ -1107,6 +1112,8 @@ def ask_chatbot(user_input):
             tanggal_tersedia = sorted(df_all["Tanggal"].dropna().dt.date.unique())
             if tanggal_tersedia:
                 tgl_info = ", ".join([t.strftime("%d/%m/%Y") for t in tanggal_tersedia[-5:]])
+                t_total = round(time.time() - t_total_start, 3)
+                print(f"[LATENCY] query='{user_input[:60]}' | fetch={t_fetch}s | llm=0s (data kosong) | total={t_total}s")
                 return (
                     f"Maaf, data cuaca maritim untuk tanggal {tanggal_str} tidak tersedia dalam sistem kami.\n\n"
                     f"Data yang tersedia mencakup tanggal-tanggal berikut (5 terbaru): {tgl_info}.\n\n"
@@ -1114,13 +1121,17 @@ def ask_chatbot(user_input):
                 )
         except:
             pass
+        t_total = round(time.time() - t_total_start, 3)
+        print(f"[LATENCY] query='{user_input[:60]}' | fetch={t_fetch}s | llm=0s (data kosong) | total={t_total}s")
         return (
             f"Maaf, data cuaca maritim untuk tanggal {tanggal_str} tidak tersedia dalam sistem kami. "
             f"Silakan gunakan menu utama untuk melihat prakiraan cuaca 3 hari ke depan, atau hubungi kami melalui WhatsApp: https://wa.me/628116601044"
         )
 
+    # ── [2] CONTEXT BUILDING ────────────────────────────
+    t_context_start = time.time()
     data_text = df.to_markdown(index=False)
-
+    system_prompt = build_system_prompt()
     dynamic_prompt = f"""
 Data cuaca maritim Sumatera Barat untuk tanggal {tanggal_str}:
 
@@ -1133,14 +1144,29 @@ Instruksi:
 - Jika kolom "Cuaca Signifikan" ada, jelaskan kondisi cuaca secara ringkas per wilayah
 - Gunakan bahasa Indonesia yang jelas dan profesional
 """
+    t_context = round(time.time() - t_context_start, 3)
 
+    # ── [3] LLM INFERENCE ──────────────────────────────
+    t_llm_start = time.time()
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0.0,
         messages=[
-            {"role": "system", "content": build_system_prompt()},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": dynamic_prompt + "\n\nPertanyaan: " + user_input}
         ],
+    )
+    t_llm = round(time.time() - t_llm_start, 3)
+
+    # ── [4] LOG SEMUA WAKTU ─────────────────────────────
+    t_total = round(time.time() - t_total_start, 3)
+    print(
+        f"[LATENCY] "
+        f"query='{user_input[:60]}' | "
+        f"fetch={t_fetch}s | "
+        f"context={t_context}s | "
+        f"llm={t_llm}s | "
+        f"total={t_total}s"
     )
 
     return response.choices[0].message.content
@@ -1253,7 +1279,7 @@ menu_items = [
     ("peringatan",  " Informasi Peringatan Dini"),
     ("infografis",  " Layanan Infografis dan Website"),
     ("cuaca",       " Ringkasan Cuaca Maritim Sumbar (3 Hari)"),
-    ("keselamatan", " Saran Keselamatan Perahu untuk Berlayar"),
+    ("keselamatan", " Jenis Perahu yang Diizinkan Berlayar"),
     ("lokasi",      " Lokasi dan Kontak"),
     ("suhu",        " Informasi Suhu Maritim"),
 ]
