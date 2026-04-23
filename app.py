@@ -1253,7 +1253,7 @@ menu_items = [
     ("peringatan",  " Informasi Peringatan Dini"),
     ("infografis",  " Layanan Infografis dan Website"),
     ("cuaca",       " Ringkasan Cuaca Maritim Sumbar (3 Hari)"),
-    ("keselamatan", " Jenis Perahu yang Diizinkan Berlayar"),
+    ("keselamatan", " Saran Keselamatan Perahu untuk Berlayar"),
     ("lokasi",      " Lokasi dan Kontak"),
     ("suhu",        " Informasi Suhu Maritim"),
 ]
